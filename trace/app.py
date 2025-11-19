@@ -1,8 +1,8 @@
 from flask import Flask, jsonify
-import sqlite3
+import psycopg2
 from opentelemetry import trace
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.sqlite3 import SQLite3Instrumentor
+from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -23,15 +23,29 @@ trace.get_tracer_provider().add_span_processor(span_processor)
 
 app = Flask(__name__)
 FlaskInstrumentor().instrument_app(app)
-SQLite3Instrumentor().instrument()
+Psycopg2Instrumentor().instrument()
+
+DB_CONFIG = {
+    "host": "postgres",
+    "port": 5432,
+    "dbname": "exampledb",
+    "user": "exampleuser",
+    "password": "examplepass"
+}
 
 def init_db():
-    conn = sqlite3.connect('example.db')
+    conn = psycopg2.connect(**DB_CONFIG)
     c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)')
-    c.execute('INSERT OR IGNORE INTO users (id, name) VALUES (1, "Alice")')
-    c.execute('INSERT OR IGNORE INTO users (id, name) VALUES (2, "Bob")')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE
+        )
+    ''')
+    c.execute('INSERT INTO users (name) VALUES (%s) ON CONFLICT DO NOTHING', ("Alice",))
+    c.execute('INSERT INTO users (name) VALUES (%s) ON CONFLICT DO NOTHING', ("Bob",))
     conn.commit()
+    c.close()
     conn.close()
 
 @app.route('/')
@@ -41,10 +55,11 @@ def hello():
 @app.route('/users')
 def get_users():
     with tracer.start_as_current_span("db-query"):
-        conn = sqlite3.connect('example.db')
+        conn = psycopg2.connect(**DB_CONFIG)
         c = conn.cursor()
-        c.execute('SELECT * FROM users')
+        c.execute('SELECT id, name FROM users')
         rows = c.fetchall()
+        c.close()
         conn.close()
     return jsonify(rows)
 
